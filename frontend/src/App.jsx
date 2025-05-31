@@ -1,88 +1,236 @@
-import { useEffect, useState } from 'react';
-import { ethers } from 'ethers';
-import { NFTStorage, File } from 'nft.storage';
-import CreatorTokenAbi from './abis/CreatorToken.json';
-import ArtNFTAbi from './abis/ArtNFT.json';
+// export default App;
+import React, { useState, useEffect, useCallback } from "react";
+import { ethers } from "ethers";
+import { create } from "ipfs-http-client";
 
-const tokenAddress = import.meta.env.VITE_TOKEN_ADDRESS;
-const nftAddress = import.meta.env.VITE_NFT_ADDRESS;
-const nftStorageApiKey = import.meta.env.VITE_NFT_STORAGE_KEY;
+import WalletConnect from "./components/WallectConnect";
+import MintNFT from "./components/MintNFT";
+import NFTGallery from "./components/NFTGallery";
 
-function App() {
-  const [account, setAccount] = useState('');
+// Import your contract ABI JSON files accordingly
+import CreatorTokenABI from "./abis/CreatorToken.json";
+import ArtNFTABI from "./abis/ArtNFT.json";
+
+const ipfsClient = create("https://ipfs.infura.io:5001/api/v0");
+
+const App = () => {
   const [provider, setProvider] = useState(null);
-  const [nftContract, setNftContract] = useState(null);
-  const [tokenContract, setTokenContract] = useState(null);
-  const [nfts, setNfts] = useState([]);
-  const [balance, setBalance] = useState('');
-  const [image, setImage] = useState(null);
-  const [name, setName] = useState('');
-  const [desc, setDesc] = useState('');
+  const [signer, setSigner] = useState(null);
+  const [account, setAccount] = useState(null);
+  const [creatorTokenContract, setCreatorTokenContract] = useState(null);
+  const [artNFTContract, setArtNFTContract] = useState(null);
+  const [tokenBalance, setTokenBalance] = useState("0");
+  const [mintedNFTs, setMintedNFTs] = useState([]);
+  const [mintLoading, setMintLoading] = useState(false);
+  const [mintFile, setMintFile] = useState(null);
+  const [txHash, setTxHash] = useState("");
+  const [error, setError] = useState("");
+  const [networkCorrect, setNetworkCorrect] = useState(false);
+
+  // Replace with your actual deployed contract addresses on Lisk Sepolia
+  const CREATOR_TOKEN_ADDRESS = "0x1AA4A48F764fd43FD94158e4d18583fe2b409f1F";
+  const ART_NFT_ADDRESS = "0xC507AC5c83f48635D7A3290f8A4C9532bE3268e0";
 
   const connectWallet = async () => {
-    if (window.ethereum) {
-      const prov = new ethers.providers.Web3Provider(window.ethereum);
-      const accounts = await prov.send("eth_requestAccounts", []);
-      setAccount(accounts[0]);
-      setProvider(prov);
-      const signer = prov.getSigner();
+    setError("");
+    try {
+      if (!window.ethereum) {
+        setError("MetaMask is not installed. Please install it.");
+        return;
+      }
+      const _provider = new ethers.providers.Web3Provider(window.ethereum);
+      const { chainId } = await _provider.getNetwork();
+      // 11155111 is Sepolia testnet chainId; replace if needed
+      if (chainId !== 11155111) {
+        setError("Please switch your wallet to Lisk Sepolia network.");
+        setNetworkCorrect(false);
+        return;
+      } else {
+        setNetworkCorrect(true);
+      }
 
-      const token = new ethers.Contract(tokenAddress, CreatorTokenAbi.abi, signer);
-      const nft = new ethers.Contract(nftAddress, ArtNFTAbi.abi, signer);
-      setTokenContract(token);
-      setNftContract(nft);
+      await _provider.send("eth_requestAccounts", []);
+      const _signer = _provider.getSigner();
+      const userAddress = await _signer.getAddress();
+
+      const creatorToken = new ethers.Contract(
+        CREATOR_TOKEN_ADDRESS,
+        CreatorTokenABI,
+        _signer
+      );
+      const artNFT = new ethers.Contract(ART_NFT_ADDRESS, ArtNFTABI, _signer);
+
+      setProvider(_provider);
+      setSigner(_signer);
+      setAccount(userAddress);
+      setCreatorTokenContract(creatorToken);
+      setArtNFTContract(artNFT);
+    } catch (err) {
+      setError("Failed to connect wallet: " + err.message);
     }
   };
 
-  const uploadToIPFS = async () => {
-    const client = new NFTStorage({ token: nftStorageApiKey });
-    const metadata = await client.store({
-      name,
-      description: desc,
-      image: new File([image], image.name, { type: image.type }),
-    });
-    return metadata.url;
-  };
+  // Fetch Creator Token Balance
+  const fetchTokenBalance = useCallback(async () => {
+    if (creatorTokenContract && account) {
+      try {
+        const bal = await creatorTokenContract.balanceOf(account);
+        setTokenBalance(ethers.utils.formatUnits(bal, 18));
+      } catch (e) {
+        console.error("Error fetching token balance:", e);
+      }
+    }
+  }, [creatorTokenContract, account]);
 
-  const mintNFT = async () => {
-    const uri = await uploadToIPFS();
-    const tx = await nftContract.mintNFT(uri);
-    await tx.wait();
-    alert("NFT Minted! TX: " + tx.hash);
-  };
-
-  const fetchBalance = async () => {
-    const bal = await tokenContract.balanceOf(account);
-    setBalance(ethers.utils.formatEther(bal));
-  };
+  // Fetch Minted NFTs
+  const fetchMintedNFTs = useCallback(async () => {
+    if (!artNFTContract) return;
+    try {
+      const filter = artNFTContract.filters.NFTMinted();
+      const events = await artNFTContract.queryFilter(filter, 0, "latest");
+      const nfts = await Promise.all(
+        events.map(async (event) => {
+          const tokenId = event.args.tokenId.toNumber();
+          const creator = event.args.creator;
+          let tokenURI = "";
+          try {
+            tokenURI = await artNFTContract.tokenURI(tokenId);
+          } catch {
+            tokenURI = "";
+          }
+          let metadata = { name: "", image: "", description: "" };
+          if (tokenURI) {
+            try {
+              const resp = await fetch(tokenURI);
+              if (resp.ok) {
+                metadata = await resp.json();
+              }
+            } catch {}
+          }
+          return {
+            tokenId,
+            creator,
+            metadata,
+          };
+        })
+      );
+      setMintedNFTs(nfts.reverse());
+    } catch (err) {
+      console.error("Error fetching minted NFTs:", err);
+    }
+  }, [artNFTContract]);
 
   useEffect(() => {
-    if (tokenContract && account) {
-      fetchBalance();
+    if (account) {
+      fetchTokenBalance();
     }
-  }, [tokenContract, account]);
+  }, [account, fetchTokenBalance]);
+
+  useEffect(() => {
+    if (artNFTContract) {
+      fetchMintedNFTs();
+    }
+  }, [artNFTContract, fetchMintedNFTs]);
+
+  // Upload file to IPFS
+  const uploadFileToIPFS = async (file) => {
+    try {
+      const added = await ipfsClient.add(file);
+      return `https://ipfs.infura.io/ipfs/${added.path}`;
+    } catch (err) {
+      setError("File upload failed: " + err.message);
+      return null;
+    }
+  };
+
+  // Upload metadata JSON to IPFS
+  const uploadMetadataToIPFS = async (metadata) => {
+    try {
+      const added = await ipfsClient.add(JSON.stringify(metadata));
+      return `https://ipfs.infura.io/ipfs/${added.path}`;
+    } catch (err) {
+      setError("Metadata upload failed: " + err.message);
+      return null;
+    }
+  };
+
+  // Mint NFT handler
+  const mintNFTHandler = async () => {
+    setError("");
+    setTxHash("");
+    if (!mintFile) {
+      setError("Please select an image file.");
+      return;
+    }
+    if (!artNFTContract) {
+      setError("Connect your wallet first.");
+      return;
+    }
+    try {
+      setMintLoading(true);
+      const imageUrl = await uploadFileToIPFS(mintFile);
+      if (!imageUrl) {
+        setMintLoading(false);
+        return;
+      }
+
+      const metadata = {
+        name: "Art NFT #" + Date.now(),
+        description: "Unique digital artwork",
+        image: imageUrl,
+      };
+
+      const metadataURI = await uploadMetadataToIPFS(metadata);
+      if (!metadataURI) {
+        setMintLoading(false);
+        return;
+      }
+
+      const tx = await artNFTContract.mint(metadataURI);
+      await tx.wait();
+      setTxHash(tx.hash);
+
+      fetchTokenBalance();
+      fetchMintedNFTs();
+      setMintFile(null);
+    } catch (err) {
+      setError("Minting failed: " + err.message);
+    } finally {
+      setMintLoading(false);
+    }
+  };
 
   return (
-    <div style={{ padding: '2rem' }}>
-      <h1>NFT Reward Platform</h1>
-      {account ? (
-        <>
-          <p>Connected: {account}</p>
-          <p>CTK Balance: {balance}</p>
+    <div className="container">
+      <header>
+        <h1>Token-Powered NFT Platform</h1>
+        <WalletConnect
+          account={account}
+          connectWallet={connectWallet}
+          tokenBalance={tokenBalance}
+        />
+      </header>
 
-          <div>
-            <h2>Mint NFT</h2>
-            <input type="text" placeholder="Name" onChange={e => setName(e.target.value)} />
-            <input type="text" placeholder="Description" onChange={e => setDesc(e.target.value)} />
-            <input type="file" onChange={e => setImage(e.target.files[0])} />
-            <button onClick={mintNFT}>Mint</button>
-          </div>
-        </>
-      ) : (
-        <button onClick={connectWallet}>Connect Wallet</button>
-      )}
+      <main>
+        <MintNFT
+          mintFile={mintFile}
+          setMintFile={setMintFile}
+          mintNFTHandler={mintNFTHandler}
+          mintLoading={mintLoading}
+          txHash={txHash}
+          error={error}
+          account={account}
+          networkCorrect={networkCorrect}
+        />
+
+        <NFTGallery mintedNFTs={mintedNFTs} />
+      </main>
+
+      <footer>
+        Developed for Token-Powered NFT Platform Assignment &mdash; &copy; 2024
+      </footer>
     </div>
   );
-}
+};
 
 export default App;
