@@ -8,6 +8,8 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
+.env
+@openzeppelin/contracts
 dist
 dist-ssr
 *.local

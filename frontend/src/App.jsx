@@ -1,6 +1,7 @@
 // export default App;
 import React, { useState, useEffect, useCallback } from "react";
-import { ethers } from "ethers";
+import { BrowserProvider, Contract, formatUnits } from "ethers";
+// import { ethers } from "ethers";
 import { create } from "ipfs-http-client";
 
 import WalletConnect from "./components/WallectConnect";
@@ -11,7 +12,21 @@ import NFTGallery from "./components/NFTGallery";
 import CreatorTokenABI from "./abis/CreatorToken.json";
 import ArtNFTABI from "./abis/ArtNFT.json";
 
-const ipfsClient = create("https://ipfs.infura.io:5001/api/v0");
+const projectId = import.meta.env.VITE_PROJECTID;
+const projectSecret = import.meta.env.VITE_PROJECTSECRET;
+const auth = "Basic " + btoa(projectId + ":" + projectSecret);
+
+// const ipfsClient = create("https://ipfs.infura.io:5001/api/v0");
+
+const ipfsClient = create({
+  host: "ipfs.infura.io",
+  port: 5001,
+  protocol: "https",
+  headers: {
+    authorization: auth,
+  },
+});
+
 
 const App = () => {
   const [provider, setProvider] = useState(null);
@@ -38,27 +53,27 @@ const App = () => {
         setError("MetaMask is not installed. Please install it.");
         return;
       }
-      const _provider = new ethers.providers.Web3Provider(window.ethereum);
+      const _provider = new BrowserProvider(window.ethereum);
       const { chainId } = await _provider.getNetwork();
       // 11155111 is Sepolia testnet chainId; replace if needed
-      if (chainId !== 11155111) {
-        setError("Please switch your wallet to Lisk Sepolia network.");
-        setNetworkCorrect(false);
-        return;
-      } else {
+      // if (chainId !== 4202) {
+      //   setError("Please switch your wallet to Lisk Sepolia network.");
+      //   setNetworkCorrect(false);
+      //   return;
+      // } else {
         setNetworkCorrect(true);
-      }
+      // }
 
       await _provider.send("eth_requestAccounts", []);
-      const _signer = _provider.getSigner();
+      const _signer = await _provider.getSigner();
       const userAddress = await _signer.getAddress();
 
-      const creatorToken = new ethers.Contract(
+      const creatorToken = new Contract(
         CREATOR_TOKEN_ADDRESS,
-        CreatorTokenABI,
+        CreatorTokenABI.abi,
         _signer
       );
-      const artNFT = new ethers.Contract(ART_NFT_ADDRESS, ArtNFTABI, _signer);
+      const artNFT = new Contract(ART_NFT_ADDRESS, ArtNFTABI.abi, _signer);
 
       setProvider(_provider);
       setSigner(_signer);
@@ -67,6 +82,8 @@ const App = () => {
       setArtNFTContract(artNFT);
     } catch (err) {
       setError("Failed to connect wallet: " + err.message);
+      // alert("Failed to connect wallet: " + err.message);
+
     }
   };
 
@@ -75,7 +92,7 @@ const App = () => {
     if (creatorTokenContract && account) {
       try {
         const bal = await creatorTokenContract.balanceOf(account);
-        setTokenBalance(ethers.utils.formatUnits(bal, 18));
+        setTokenBalance(formatUnits(bal, 18));
       } catch (e) {
         console.error("Error fetching token balance:", e);
       }
@@ -88,9 +105,13 @@ const App = () => {
     try {
       const filter = artNFTContract.filters.NFTMinted();
       const events = await artNFTContract.queryFilter(filter, 0, "latest");
+
+      console.log("Events fetched:", events);
+      
       const nfts = await Promise.all(
         events.map(async (event) => {
-          const tokenId = event.args.tokenId.toNumber();
+          // const tokenId = event.args.tokenId.toNumber();
+          const tokenId = Number(event.arg.tokenId);
           const creator = event.args.creator;
           let tokenURI = "";
           try {
@@ -203,7 +224,7 @@ const App = () => {
   return (
     <div className="container">
       <header>
-        <h1>Token-Powered NFT Platform</h1>
+        <h1>Token Powered NFT Platform</h1>
         <WalletConnect
           account={account}
           connectWallet={connectWallet}
