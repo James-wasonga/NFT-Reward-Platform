@@ -99,7 +99,7 @@ const App = () => {
     }
   }, [creatorTokenContract, account]);
 
-  // Fetch Minted NFTs
+  // Fetch Minted the NFT
   const fetchMintedNFTs = useCallback(async () => {
     if (!artNFTContract) return;
     try {
